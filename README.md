@@ -1,16 +1,18 @@
 # CarScout
 
-A chat-style webapp for finding used and new car listings across the US. Talk to it like an assistant — "1999 vw jetta in Seattle", "manual miata under 20k", "show me only EVs" — and it parses your message with **Google Gemini** (default `gemini-3.1-flash-lite`), then aggregates listings from AutoTrader, CarMax, Carvana, Cars.com, and CarGurus.
+A chat-style webapp for finding **real US car listings** with **real photos**. Talk to it like an assistant — "1999 vw jetta in Seattle", "manual miata under 20k", "show me only EVs" — and it parses your message with **Google Gemini** (default `gemini-3.1-flash-lite`), then pulls live listings via **MarketCheck**, which aggregates from AutoTrader, CarMax, Carvana, Cars.com, CarGurus, and many dealer sites.
 
 - **Nationwide** search. If you don't name a city, it defaults to **Atlanta, GA**.
-- **No key needed for visitors.** The Gemini key lives in a Vercel Edge function on the server side. You bring one key, everyone uses the app.
-- **No database, no build step.** One static HTML file + one Edge function.
+- **No key needed for visitors.** Both the Gemini key and the MarketCheck key live in Vercel Edge functions on the server side. You bring two keys, everyone uses the app.
+- **Graceful degradation.** If MarketCheck isn't configured or runs out of credits, Live silently falls back to deterministic Demo data with a chat note. If Gemini is down, parsing falls back to a built-in regex. Nothing crashes.
+- **No database, no build step.** One static HTML file + two Edge functions.
 
 ```
 carscout/
-├── index.html       # chat UI (React via esm.sh, Tailwind via CDN)
+├── index.html         # chat UI (React via esm.sh, Tailwind via CDN)
 ├── api/
-│   └── parse.js     # Vercel Edge function — proxies to Gemini, keeps key server-side
+│   ├── parse.js       # Vercel Edge function — Gemini proxy (parses query → params)
+│   └── listings.js    # Vercel Edge function — MarketCheck proxy (params → real listings)
 ├── README.md
 └── .gitignore
 ```
@@ -62,7 +64,7 @@ You'll be prompted:
 
 After a few seconds you'll get a preview URL like `https://carscout-xxxx.vercel.app`. The site is live, **but the chat will fall back to the regex parser** because the Gemini key isn't set yet.
 
-### 5. Add the Gemini key as an environment variable
+### 5. Add API keys as environment variables
 
 ```bash
 vercel env add GEMINI_API_KEY
@@ -71,7 +73,14 @@ vercel env add GEMINI_API_KEY
 - Paste your `AIza…` key when prompted.
 - For environment, select **all three** (Production, Preview, Development) with the spacebar, then Enter.
 
-(Optional) override the model name:
+```bash
+vercel env add MARKETCHECK_API_KEY
+```
+
+- Paste your MarketCheck API key (sign up at <https://www.marketcheck.com/apis>).
+- Again, select all three environments.
+
+(Optional) override the Gemini model name:
 
 ```bash
 vercel env add GEMINI_MODEL
@@ -79,6 +88,8 @@ vercel env add GEMINI_MODEL
 ```
 
 If the default model isn't available on your account yet, try `gemini-2.5-flash-lite` or whatever Flash-Lite tier you have access to.
+
+> The app will still load and chat without `MARKETCHECK_API_KEY` set — it just falls back to Demo data with a one-line note. Set the var whenever you're ready to flip on real listings.
 
 ### 6. Deploy to production
 
@@ -147,54 +158,44 @@ If `/api/parse` fails (no key, rate-limited, server down), the app falls back to
 
 ---
 
-## Demo mode vs. Live mode
+## Live vs. Demo mode
 
-The header has a **Demo / Live** toggle. **Demo is the default.**
+The header has a **Live / Demo** toggle. **Live is the default** and is what visitors will hit.
 
-### Demo mode
+### Live mode — real listings via MarketCheck
 
-Returns 16–24 deterministic, plausible mock listings spread across the five sources. Same query → same results. Prices follow a real depreciation curve (a 1999 Jetta comes back at $1,500–$3,000, not $25k), mileage is age-appropriate. For popular metros (Atlanta, Seattle, LA, NYC, Chicago, Boston, Austin, Dallas, Houston, Denver, Portland, Phoenix, Philadelphia, Miami, SF), real neighbor cities are used. For any other city, generic suffixes ("Downtown", "North", etc.) are used.
+Live mode calls `/api/listings`, a second Vercel Edge function that proxies to **MarketCheck**. MarketCheck aggregates real US car listings from AutoTrader, CarMax, Carvana, Cars.com, CarGurus, and many dealer sites — and returns real photos, prices, mileage, and dealer locations.
 
-Card links go to each source's real search page, pre-filled with the query and ZIP.
+**Setup (one-time):**
 
-### Live mode
+1. Sign up at <https://www.marketcheck.com/apis> and grab your API key. (They have a developer tier; check current pricing — there's usually some free/trial credit.)
+2. Add it as a Vercel env var:
+   ```bash
+   vercel env add MARKETCHECK_API_KEY
+   # paste the key, select Production + Preview + Development
+   vercel --prod
+   ```
+   Or do it in the Vercel dashboard → Project → Settings → Environment Variables → add `MARKETCHECK_API_KEY`, then redeploy.
 
-Attempts to fetch and parse real search-result pages via a user-provided CORS proxy (configured in ⚙ settings). Sites employ bot protection and JS rendering, so most requests get blocked — you'll see per-source dots (`AutoTrader: blocked`, etc.). Partial results render, no crashes.
+If `MARKETCHECK_API_KEY` isn't set, `/api/listings` returns 503 and the app **gracefully falls back to Demo data** with a one-line note in the chat. Same for 429 rate-limit responses. No crashes, no broken UI — it just degrades to sample data.
 
-For reliable real data, deploy a tiny Cloudflare Worker:
+### Demo mode — deterministic mock data
 
-```js
-export default {
-  async fetch(req) {
-    const url = new URL(req.url);
-    const target = url.searchParams.get("url");
-    if (!target) return new Response("missing ?url=", { status: 400 });
-    const upstream = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0" } });
-    const body = await upstream.text();
-    return new Response(body, {
-      headers: {
-        "content-type": upstream.headers.get("content-type") || "text/html",
-        "access-control-allow-origin": "*",
-      },
-    });
-  },
-};
-```
+Returns 16–24 plausible mock listings. Same query → same results. Prices follow a real depreciation curve (a 1999 Jetta comes back at $1,500–$3,000, not $25k), mileage is age-appropriate. For 15 popular metros (Atlanta, Seattle, LA, NYC, Chicago, Boston, Austin, Dallas, Houston, Denver, Portland, Phoenix, Philadelphia, Miami, SF), real neighbor cities are used; other cities get generic suffixes ("Downtown", "North", etc.). Photos are placeholders from `picsum.photos`. Card links go to each source's real search page, pre-filled with the query and ZIP.
 
-Or use a paid listing API (MarketCheck, Auto.dev) — wire it up in place of `fetchLiveListings` in `index.html`.
+Use Demo mode to show the app off without burning MarketCheck credits.
 
 ---
 
 ## Free tier notes
 
-Gemini's free tier has per-minute and per-day quotas (varies by model). If you go over, `/api/parse` returns a 429 and the app falls back to regex parsing with a "rate-limited" note — no crash, no broken state. If your app gets popular enough to outgrow free, switch to paid in Google AI Studio.
-
-Vercel hobby tier covers Edge function usage generously (500k invocations/mo).
+- **Gemini**: per-minute and per-day quotas (varies by model). On 429, `/api/parse` falls back to a built-in regex parser with a "rate-limited" note. No crash.
+- **MarketCheck**: per-day credits depending on plan. On 429 / 401 / not-configured, `/api/listings` falls back to Demo data with a chat note. No crash.
+- **Vercel hobby**: 500k Edge function invocations/mo, plenty for personal use.
 
 ---
 
 ## Limitations & ethics
 
 - For **personal use**. Respect each listing site's terms of service and `robots.txt`.
-- Live mode makes at most one request per source per search.
 - CarScout doesn't persist anything server-side. Chat state lives in your tab; refresh resets it.
