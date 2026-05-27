@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CarScout — Find Cars Across the US</title>
+    <link rel="icon" href="data:," />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: "#f0f7ff",
+                100: "#e0eefe",
+                500: "#3b82f6",
+                600: "#2563eb",
+                700: "#1d4ed8",
+                900: "#0b1f44",
+              },
+            },
+            keyframes: {
+              fadeIn: {
+                "0%": { opacity: 0, transform: "translateY(4px)" },
+                "100%": { opacity: 1, transform: "translateY(0)" },
+              },
+              pulseDot: {
+                "0%, 80%, 100%": { opacity: 0.25 },
+                "40%": { opacity: 1 },
+              },
+              shimmer: {
+                "0%": { backgroundPosition: "-400px 0" },
+                "100%": { backgroundPosition: "400px 0" },
+              },
+            },
+            animation: {
+              fadeIn: "fadeIn 220ms ease-out both",
+              pulseDot: "pulseDot 1.2s infinite ease-in-out",
+              shimmer: "shimmer 1.4s linear infinite",
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html, body, #root { height: 100%; }
+      body {
+        background:
+          radial-gradient(1200px 600px at 10% -10%, #dbeafe 0%, transparent 60%),
+          radial-gradient(900px 500px at 110% 10%, #e0e7ff 0%, transparent 55%),
+          #f8fafc;
+      }
+      .skeleton {
+        background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 40%, #e2e8f0 80%);
+        background-size: 800px 100%;
+      }
+      .chat-scroll::-webkit-scrollbar { width: 8px; }
+      .chat-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+    </style>
+  </head>
+  <body class="text-slate-800 antialiased">
+    <div id="root"></div>
+
+    <script type="module">
+      import React, {
+        useState,
+        useEffect,
+        useMemo,
+        useCallback,
+        useRef,
+      } from "https://esm.sh/react@18.3.1";
+      import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+
+      const h = React.createElement;
+
+      // ----------------------------- Constants ---------------------------------
+      const DEFAULT_LOCATION = { city: "Atlanta", state: "GA", zip: "30303" };
+      const DEFAULT_RADIUS = 50;
+      const CURRENT_YEAR = new Date().getFullYear();
+      const PARSE_ENDPOINT = "/api/parse";
+
+      const SOURCES = [
+        { key: "autotrader", name: "AutoTrader", color: "bg-rose-100 text-rose-800 ring-rose-200" },
+        { key: "carmax",     name: "CarMax",     color: "bg-sky-100 text-sky-800 ring-sky-200" },
+        { key: "carvana",    name: "Carvana",    color: "bg-violet-100 text-violet-800 ring-violet-200" },
+        { key: "cars",       name: "Cars.com",   color: "bg-amber-100 text-amber-800 ring-amber-200" },
+        { key: "cargurus",   name: "CarGurus",   color: "bg-emerald-100 text-emerald-800 ring-emerald-200" },
+      ];
+
+      // ----------------------------- Vehicle catalog ---------------------------
+      const MAKE_MODELS = {
+        Toyota:        ["Camry", "Corolla", "RAV4", "Highlander", "Tacoma", "Tundra", "4Runner", "Prius"],
+        Honda:         ["Civic", "Accord", "CR-V", "Pilot", "Odyssey", "HR-V", "Passport"],
+        Ford:          ["F-150", "Escape", "Explorer", "Mustang", "Bronco", "Edge", "Ranger", "Focus"],
+        Chevrolet:     ["Silverado", "Equinox", "Tahoe", "Malibu", "Traverse", "Camaro", "Corvette"],
+        Mazda:         ["CX-5", "CX-30", "Mazda3", "Mazda6", "MX-5 Miata"],
+        Subaru:        ["Outback", "Forester", "Crosstrek", "Impreza", "Ascent", "WRX"],
+        Tesla:         ["Model 3", "Model Y", "Model S", "Model X"],
+        BMW:           ["3 Series", "5 Series", "X3", "X5", "M3", "M5"],
+        Hyundai:       ["Elantra", "Sonata", "Tucson", "Santa Fe", "Kona", "Ioniq 5"],
+        Kia:           ["Forte", "K5", "Sportage", "Sorento", "Telluride", "EV6"],
+        Volkswagen:    ["Jetta", "Passat", "Golf", "GTI", "Tiguan", "Atlas", "ID.4"],
+        Nissan:        ["Altima", "Sentra", "Rogue", "Pathfinder", "Frontier", "Maxima"],
+        Jeep:          ["Wrangler", "Grand Cherokee", "Cherokee", "Compass", "Gladiator"],
+        Dodge:         ["Charger", "Challenger", "Durango"],
+        Acura:         ["TLX", "MDX", "RDX", "Integra"],
+        Lexus:         ["RX", "ES", "IS", "NX", "GX"],
+        "Mercedes-Benz": ["C-Class", "E-Class", "S-Class", "GLC", "GLE", "GLA"],
+        Audi:          ["A4", "A6", "Q5", "Q7", "S4"],
+        Cadillac:      ["Escalade", "CT5", "XT5", "XT6"],
+        GMC:           ["Sierra 1500", "Yukon", "Acadia", "Terrain"],
+        Porsche:       ["911", "Cayenne", "Macan", "Boxster"],
+      };
+
+      const BODY_TYPE_HINTS = {
+        sedan:       ["Camry","Accord","Civic","Corolla","Jetta","Altima","Sonata","Elantra","Malibu","Charger","TLX","C-Class","A4"],
+        SUV:         ["RAV4","CR-V","Highlander","Pilot","Tahoe","Explorer","CX-5","Outback","Forester","Tucson","Sportage","Tiguan","Rogue","Grand Cherokee","RX","MDX","GLC","Q5","Escalade","Yukon"],
+        truck:       ["F-150","Silverado","Tacoma","Tundra","Ranger","Frontier","Sierra 1500","Gladiator"],
+        coupe:       ["Mustang","Camaro","Corvette","Challenger","M3","911","Boxster","Integra"],
+        hatchback:   ["Golf","GTI","Mazda3","Civic","Focus","Impreza"],
+        minivan:     ["Odyssey"],
+        wagon:       ["Outback"],
+        convertible: ["MX-5 Miata","Mustang","Camaro","911","Boxster"],
+      };
+
+      const TRIMS = ["LE","SE","XLE","Limited","Sport","Touring","EX","EX-L","SR5","Premium","Base","GT","Trail Boss"];
+      const COLORS = ["Silver","White","Black","Gray","Blue","Red","Green","Pearl White"];
+
+      // Hard-coded metro neighbors for popular cities; everything else
+      // gets two generic suffixes ("Downtown", "North", "South", etc.).
+      const METRO_NEIGHBORS = {
+        Atlanta: ["Atlanta","Marietta","Decatur","Sandy Springs","Roswell","Alpharetta","Smyrna","Dunwoody","Brookhaven","East Point","College Park","Stone Mountain","Tucker","Norcross","Lawrenceville"],
+        Seattle: ["Seattle","Bellevue","Redmond","Kirkland","Renton","Bothell","Tukwila","Lynnwood","Kent","Everett","Federal Way","Auburn"],
+        "New York": ["New York","Brooklyn","Queens","Bronx","Jersey City","Hoboken","Yonkers","Newark","White Plains","Stamford"],
+        "Los Angeles": ["Los Angeles","Long Beach","Glendale","Pasadena","Santa Monica","Burbank","Anaheim","Torrance","Inglewood","Culver City"],
+        Chicago: ["Chicago","Evanston","Oak Park","Cicero","Skokie","Naperville","Aurora","Schaumburg","Berwyn","Wheaton"],
+        Boston: ["Boston","Cambridge","Somerville","Brookline","Quincy","Newton","Waltham","Medford","Watertown","Malden"],
+        Miami: ["Miami","Miami Beach","Coral Gables","Hialeah","Aventura","Doral","Homestead","Kendall","Coconut Grove","Pinecrest"],
+        Austin: ["Austin","Round Rock","Cedar Park","Pflugerville","Georgetown","Leander","Lakeway","Buda","Kyle"],
+        Dallas: ["Dallas","Plano","Frisco","Irving","Garland","Mesquite","Arlington","Carrollton","Richardson","McKinney"],
+        Houston: ["Houston","Sugar Land","Pasadena","Pearland","Katy","The Woodlands","Spring","Cypress","Humble","Kingwood"],
+        Denver: ["Denver","Aurora","Lakewood","Centennial","Englewood","Thornton","Westminster","Arvada","Boulder","Littleton"],
+        Portland: ["Portland","Beaverton","Hillsboro","Gresham","Tigard","Lake Oswego","Tualatin","West Linn","Milwaukie"],
+        Phoenix: ["Phoenix","Scottsdale","Mesa","Tempe","Chandler","Gilbert","Glendale","Peoria","Surprise","Avondale"],
+        Philadelphia: ["Philadelphia","Camden","Cherry Hill","Upper Darby","King of Prussia","Bensalem","Norristown","Wilmington"],
+        "San Francisco": ["San Francisco","Oakland","Berkeley","Daly City","San Mateo","Hayward","Fremont","Palo Alto","Redwood City","San Jose"],
+      };
+
+      function neighborsForCity(city) {
+        if (!city) return METRO_NEIGHBORS[DEFAULT_LOCATION.city];
+        if (METRO_NEIGHBORS[city]) return METRO_NEIGHBORS[city];
+        const suffixes = ["", " North", " South", " East", " West", " Heights", " Downtown", " Park"];
+        return suffixes.map((s) => `${city}${s}`);
+      }
+
+      // ----------------------------- Deterministic mock ------------------------
+      function makeRng(seedStr) {
+        let hsh = 1779033703 ^ seedStr.length;
+        for (let i = 0; i < seedStr.length; i++) {
+          hsh = Math.imul(hsh ^ seedStr.charCodeAt(i), 3432918353);
+          hsh = (hsh << 13) | (hsh >>> 19);
+        }
+        let s = hsh >>> 0;
+        return function () {
+          s |= 0;
+          s = (s + 0x6d2b79f5) | 0;
+          let t = Math.imul(s ^ (s >>> 15), 1 | s);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
+      const randInt = (rng, a, b) => Math.floor(rng() * (b - a + 1)) + a;
+
+      function findBodyTypeModels(bodyType) {
+        if (!bodyType) return null;
+        const key = Object.keys(BODY_TYPE_HINTS).find(
+          (k) => k.toLowerCase() === bodyType.toLowerCase()
+        );
+        if (!key) return null;
+        const pairs = [];
+        for (const [mk, models] of Object.entries(MAKE_MODELS)) {
+          for (const md of models) if (BODY_TYPE_HINTS[key].includes(md)) pairs.push({ make: mk, model: md });
+        }
+        return pairs.length ? pairs : null;
+      }
+
+      function estimatePrice(rng, year, priceMax) {
+        const age = Math.max(0, CURRENT_YEAR - year);
+        const newPrice = randInt(rng, 22000, 58000);
+        let value = newPrice;
+        for (let i = 0; i < age; i++) value *= i === 0 ? 0.85 : 0.9;
+        value *= 0.85 + rng() * 0.3;
+        value = Math.max(1200, Math.round(value / 50) * 50);
+        if (priceMax) value = Math.min(value, priceMax);
+        return value;
+      }
+      function estimateMileage(rng, year, mileageMax, isNew) {
+        if (isNew) return randInt(rng, 5, 250);
+        const age = Math.max(0, CURRENT_YEAR - year);
+        const milesPerYear = randInt(rng, 8000, 15000);
+        const noise = randInt(rng, -8000, 12000);
+        let miles = Math.max(500, age * milesPerYear + noise);
+        if (mileageMax) miles = Math.min(miles, mileageMax);
+        return Math.round(miles / 100) * 100;
+      }
+
+      function generateMockListings(params) {
+        const seedKey = JSON.stringify({
+          mk: (params.make || "").toLowerCase(),
+          md: (params.model || "").toLowerCase(),
+          bt: (params.body_type || "").toLowerCase(),
+          ymin: params.year_min || 0,
+          ymax: params.year_max || 0,
+          pmax: params.price_max || 0,
+          mmax: params.mileage_max || 0,
+          city: params.city || "",
+          zip: params.zip || "",
+          r: params.radius_miles || DEFAULT_RADIUS,
+          nou: params.new_or_used || "any",
+          tr: params.transmission || "any",
+          ft: params.fuel_type || "any",
+        });
+        const rng = makeRng(seedKey);
+
+        const targetMake = params.make ? canonicalizeMake(params.make) : null;
+        const targetModel = params.model || null;
+        const yearMin = params.year_min || CURRENT_YEAR - 5;
+        const yearMax = params.year_max || CURRENT_YEAR;
+        const priceMax = params.price_max || 50000;
+        const mileageMax = params.mileage_max || null;
+        const radius = params.radius_miles || DEFAULT_RADIUS;
+        const isNew = params.new_or_used === "new";
+
+        const bodyPairs = findBodyTypeModels(params.body_type);
+        const cities = neighborsForCity(params.city);
+        const count = randInt(rng, 16, 24);
+        const listings = [];
+        const makeKeys = Object.keys(MAKE_MODELS);
+
+        for (let i = 0; i < count; i++) {
+          const source = SOURCES[Math.floor(rng() * SOURCES.length)];
+
+          let make, model;
+          if (targetMake && MAKE_MODELS[targetMake]) {
+            make = targetMake;
+            const models = MAKE_MODELS[targetMake];
+            if (targetModel) {
+              const found = models.find((m) => m.toLowerCase() === targetModel.toLowerCase());
+              model = found || targetModel;
+            } else model = pick(rng, models);
+          } else if (bodyPairs) {
+            const p = pick(rng, bodyPairs);
+            make = p.make; model = p.model;
+          } else {
+            make = pick(rng, makeKeys);
+            model = pick(rng, MAKE_MODELS[make]);
+          }
+
+          const year = randInt(rng, yearMin, yearMax);
+          const trim = pick(rng, TRIMS);
+          const color = pick(rng, COLORS);
+          const price = estimatePrice(rng, year, priceMax);
+          const mileage = estimateMileage(rng, year, mileageMax, isNew);
+          const distance = +(rng() * radius).toFixed(1);
+          const city = cities[i % cities.length];
+          const id = `${source.key}-${i}-${Math.floor(rng() * 1e6)}`;
+          const vin = makeFakeVin(rng);
+
+          listings.push({
+            id, vin, year, make, model, trim, color, price, mileage,
+            city, distance,
+            source: source.key, sourceName: source.name,
+            image: `https://picsum.photos/seed/${id}/600/400`,
+            url: buildSourceUrl(source.key, { make, model, year, zip: params.zip || DEFAULT_LOCATION.zip }),
+          });
+        }
+
+        const seen = new Set(), deduped = [];
+        for (const l of listings) {
+          const key = l.vin || `${l.year}|${l.make}|${l.model}|${l.trim}|${l.price}|${l.mileage}`;
+          if (seen.has(key)) continue;
+          seen.add(key); deduped.push(l);
+        }
+        return deduped;
+      }
+
+      const MAKE_ALIASES = {
+        vw: "Volkswagen", volkswagon: "Volkswagen", volkswagen: "Volkswagen",
+        chevy: "Chevrolet", chev: "Chevrolet", chevrolet: "Chevrolet",
+        mb: "Mercedes-Benz", benz: "Mercedes-Benz", "mercedes-benz": "Mercedes-Benz", mercedes: "Mercedes-Benz",
+        bimmer: "BMW", beemer: "BMW", bmw: "BMW",
+        caddy: "Cadillac", cadillac: "Cadillac",
+        toyota: "Toyota", honda: "Honda", ford: "Ford", mazda: "Mazda",
+        subaru: "Subaru", tesla: "Tesla", hyundai: "Hyundai", kia: "Kia",
+        nissan: "Nissan", jeep: "Jeep", dodge: "Dodge", acura: "Acura",
+        lexus: "Lexus", audi: "Audi", gmc: "GMC", porsche: "Porsche",
+      };
+      function canonicalizeMake(input) {
+        if (!input) return null;
+        const k = String(input).trim().toLowerCase();
+        return MAKE_ALIASES[k] || (Object.keys(MAKE_MODELS).find((m) => m.toLowerCase() === k) || capitalize(input));
+      }
+      function capitalize(s) {
+        return !s ? s : s.split(" ").map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+      }
+      function makeFakeVin(rng) {
+        const chars = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789";
+        let v = "";
+        for (let i = 0; i < 17; i++) v += chars[Math.floor(rng() * chars.length)];
+        return v;
+      }
+      function buildSourceUrl(sourceKey, { make, model, year, zip }) {
+        const q = encodeURIComponent(`${year} ${make} ${model}`);
+        const z = encodeURIComponent(zip || DEFAULT_LOCATION.zip);
+        switch (sourceKey) {
+          case "autotrader": return `https://www.autotrader.com/cars-for-sale/all-cars?searchRadius=50&zip=${z}&keyword=${q}`;
+          case "carmax":     return `https://www.carmax.com/cars?search=${q}&zip=${z}`;
+          case "carvana":    return `https://www.carvana.com/cars?search=${q}`;
+          case "cars":       return `https://www.cars.com/shopping/results/?keyword=${q}&zip=${z}&maximum_distance=50`;
+          case "cargurus":   return `https://www.cargurus.com/Cars/inventorylisting/viewDetailsFilterViewInventoryListing.action?keyword=${q}&zip=${z}`;
+          default:           return `https://www.google.com/search?q=${q}`;
+        }
+      }
+
+      // ----------------------------- Cities (fallback parser) ------------------
+      const POPULAR_CITIES = {
+        atlanta:        { city: "Atlanta",        state: "GA", zip: "30303" },
+        seattle:        { city: "Seattle",        state: "WA", zip: "98101" },
+        "san francisco":{ city: "San Francisco",  state: "CA", zip: "94110" },
+        sf:             { city: "San Francisco",  state: "CA", zip: "94110" },
+        "new york":     { city: "New York",       state: "NY", zip: "10001" },
+        nyc:            { city: "New York",       state: "NY", zip: "10001" },
+        "los angeles":  { city: "Los Angeles",    state: "CA", zip: "90001" },
+        la:             { city: "Los Angeles",    state: "CA", zip: "90001" },
+        chicago:        { city: "Chicago",        state: "IL", zip: "60601" },
+        boston:         { city: "Boston",         state: "MA", zip: "02108" },
+        miami:          { city: "Miami",          state: "FL", zip: "33101" },
+        austin:         { city: "Austin",         state: "TX", zip: "78701" },
+        dallas:         { city: "Dallas",         state: "TX", zip: "75201" },
+        houston:        { city: "Houston",        state: "TX", zip: "77001" },
+        denver:         { city: "Denver",         state: "CO", zip: "80202" },
+        portland:       { city: "Portland",       state: "OR", zip: "97201" },
+        phoenix:        { city: "Phoenix",        state: "AZ", zip: "85001" },
+        philadelphia:   { city: "Philadelphia",   state: "PA", zip: "19101" },
+        philly:         { city: "Philadelphia",   state: "PA", zip: "19101" },
+        "san diego":    { city: "San Diego",      state: "CA", zip: "92101" },
+        nashville:      { city: "Nashville",      state: "TN", zip: "37201" },
+        "las vegas":    { city: "Las Vegas",      state: "NV", zip: "89101" },
+        orlando:        { city: "Orlando",        state: "FL", zip: "32801" },
+        minneapolis:    { city: "Minneapolis",    state: "MN", zip: "55401" },
+        detroit:        { city: "Detroit",        state: "MI", zip: "48201" },
+        "washington":   { city: "Washington",     state: "DC", zip: "20001" },
+        "dc":           { city: "Washington",     state: "DC", zip: "20001" },
+      };
+      function findLocationInText(text) {
+        const lower = text.toLowerCase();
+        const keys = Object.keys(POPULAR_CITIES).sort((a, b) => b.length - a.length);
+        for (const k of keys) {
+          if (new RegExp(`\\b${k.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`).test(lower)) {
+            return POPULAR_CITIES[k];
+          }
+        }
+        const zip = text.match(/\b(\d{5})\b/);
+        if (zip) return { city: null, state: null, zip: zip[1] };
+        return null;
+      }
+
+      function parseWithRegex(query) {
+        const q = String(query || "").trim();
+        const lower = q.toLowerCase();
+        const out = {};
+
+        const range = lower.match(/\b(19[89]\d|20\d{2})\s*[-–to]+\s*(19[89]\d|20\d{2})\b/);
+        if (range) {
+          out.year_min = Math.min(+range[1], +range[2]);
+          out.year_max = Math.max(+range[1], +range[2]);
+        } else {
+          const plus = lower.match(/\b(19[89]\d|20\d{2})\s*\+|\b(19[89]\d|20\d{2})\s*(?:and\s+)?(?:newer|or newer|up)/);
+          if (plus) {
+            out.year_min = parseInt(plus[1] || plus[2], 10);
+            out.year_max = CURRENT_YEAR;
+          } else {
+            const yr = lower.match(/\b(19[89]\d|20\d{2})\b/);
+            if (yr) { out.year_min = +yr[1]; out.year_max = +yr[1]; }
+            if (/\b(newer|recent|late[-\s]?model)\b/.test(lower)) {
+              out.year_min = CURRENT_YEAR - 4; out.year_max = CURRENT_YEAR;
+            }
+          }
+        }
+
+        const priceM = lower.match(/(?:under|less than|max|<|below)\s*\$?\s*(\d{1,3}(?:,\d{3})*|\d+)\s*(k)?/);
+        if (priceM) {
+          let n = parseInt(priceM[1].replace(/,/g, ""), 10);
+          if (priceM[2] === "k" || n < 1000) n *= 1000;
+          out.price_max = n;
+        }
+
+        const milesM = lower.match(/(?:under|less than|<)\s*(\d{1,3}(?:,\d{3})*|\d+)\s*(k)?\s*(?:miles|mi|mileage)/);
+        if (milesM) {
+          let n = parseInt(milesM[1].replace(/,/g, ""), 10);
+          if (milesM[2] === "k" || n < 1000) n *= 1000;
+          out.mileage_max = n;
+        }
+
+        if (/\bnew\b/.test(lower) && !/\bnewer\b/.test(lower)) out.new_or_used = "new";
+        else if (/\bused\b/.test(lower)) out.new_or_used = "used";
+
+        if (/\bmanual|stick(?:\s*shift)?\b/.test(lower)) out.transmission = "manual";
+        else if (/\bauto(?:matic)?\b/.test(lower)) out.transmission = "automatic";
+
+        if (/\belectric|\bev\b/.test(lower)) out.fuel_type = "electric";
+        else if (/\bhybrid\b/.test(lower)) out.fuel_type = "hybrid";
+        else if (/\bdiesel\b/.test(lower)) out.fuel_type = "diesel";
+
+        const body = lower.match(/\b(sedan|suv|truck|coupe|hatchback|minivan|wagon|convertible|pickup)\b/);
+        if (body) out.body_type = body[1] === "pickup" ? "truck" : body[1] === "suv" ? "SUV" : body[1];
+
+        const makeKey = Object.keys(MAKE_ALIASES).find((alias) =>
+          new RegExp(`\\b${alias.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`, "i").test(lower)
+        );
+        if (makeKey) {
+          out.make = MAKE_ALIASES[makeKey];
+          const models = MAKE_MODELS[out.make] || [];
+          const m = models.find((md) =>
+            new RegExp(`\\b${md.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`, "i").test(q)
+          );
+          if (m) out.model = m;
+        } else {
+          for (const [mk, models] of Object.entries(MAKE_MODELS)) {
+            const m = models.find((md) =>
+              new RegExp(`\\b${md.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`, "i").test(q)
+            );
+            if (m) { out.make = mk; out.model = m; break; }
+          }
+        }
+
+        const loc = findLocationInText(q);
+        if (loc) {
+          if (loc.city) out.city = loc.city;
+          if (loc.state) out.state = loc.state;
+          if (loc.zip) out.zip = loc.zip;
+        }
+
+        return out;
+      }
+
+      function buildAckMessage(params) {
+        const what =
+          params.make && params.model ? `${params.year_min && params.year_min === params.year_max ? params.year_min + " " : ""}${params.make} ${params.model}`
+          : params.make ? `${params.make}`
+          : params.body_type ? `${params.body_type}s`
+          : "cars";
+        const where = params.city ? `around ${params.city}${params.state ? ", " + params.state : ""}` : "nationwide";
+        const price = params.price_max ? ` under $${params.price_max.toLocaleString()}` : "";
+        return `On it — ${what}${price} ${where}. Searching now.`;
+      }
+
+      // ----------------------------- Proxy parse -------------------------------
+      async function parseViaProxy(query, previous) {
+        const res = await fetch(PARSE_ENDPOINT, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query, previous: previous || null }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const err = new Error(data?.error || `HTTP ${res.status}`);
+          err.status = res.status;
+          err.detail = data?.detail;
+          throw err;
+        }
+        return data;
+      }
+
+      // ----------------------------- Live (CORS proxy) -------------------------
+      async function fetchLiveListings(params, proxyUrl, onSourceStatus) {
+        const results = []; const errors = {};
+        async function tryFetch(sourceKey, url) {
+          onSourceStatus(sourceKey, "fetching");
+          const proxied = proxyUrl.replace(/\/+$/, "") + "/" + url;
+          try {
+            const res = await fetch(proxied);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const html = await res.text();
+            const parsed = parseListingsHtml(sourceKey, html, params);
+            onSourceStatus(sourceKey, parsed.length ? "ok" : "empty");
+            results.push(...parsed);
+          } catch (e) {
+            errors[sourceKey] = (e && e.message) || "blocked";
+            onSourceStatus(sourceKey, "blocked");
+          }
+        }
+        await Promise.all(
+          SOURCES.map((s) =>
+            tryFetch(s.key, buildSourceUrl(s.key, {
+              make: params.make || "", model: params.model || "",
+              year: params.year_max || "", zip: params.zip || DEFAULT_LOCATION.zip,
+            }))
+          )
+        );
+        const seen = new Set(), deduped = [];
+        for (const l of results) {
+          const key = l.vin || `${l.year}|${l.make}|${l.model}|${l.trim}|${l.price}|${l.mileage}`;
+          if (seen.has(key)) continue;
+          seen.add(key); deduped.push(l);
+        }
+        return { listings: deduped, errors };
+      }
+      function parseListingsHtml(sourceKey, html, params) {
+        try {
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const ldNodes = doc.querySelectorAll('script[type="application/ld+json"]');
+          const out = [];
+          ldNodes.forEach((n) => {
+            try {
+              const data = JSON.parse(n.textContent || "{}");
+              (Array.isArray(data) ? data : [data]).forEach((d) => {
+                if (d && (d["@type"] === "Vehicle" || d["@type"] === "Car" || d["@type"] === "Product")) {
+                  out.push({
+                    id: `${sourceKey}-${(d.vehicleIdentificationNumber || d.sku || Math.random()).toString()}`,
+                    vin: d.vehicleIdentificationNumber || "",
+                    year: parseInt(d.vehicleModelDate || d.modelDate || 0, 10) || null,
+                    make: d.brand?.name || d.manufacturer?.name || params.make || "",
+                    model: d.model || params.model || "",
+                    trim: d.vehicleConfiguration || "",
+                    price: parseFloat(d.offers?.price || d.offers?.lowPrice || 0) || null,
+                    mileage: parseFloat(d.mileageFromOdometer?.value || 0) || null,
+                    city: d.offers?.areaServed?.name || "",
+                    distance: null,
+                    source: sourceKey,
+                    sourceName: SOURCES.find((s) => s.key === sourceKey)?.name || sourceKey,
+                    image: d.image || "", url: d.offers?.url || d.url || "",
+                  });
+                }
+              });
+            } catch {}
+          });
+          return out;
+        } catch { return []; }
+      }
+
+      // ----------------------------- UI helpers --------------------------------
+      const fmtMoney = (n) => n == null || Number.isNaN(n) ? "—" : "$" + Math.round(n).toLocaleString();
+      const fmtMiles = (n) => n == null || Number.isNaN(n) ? "—" : Math.round(n).toLocaleString() + " mi";
+
+      function buildResultSummary(params, listings) {
+        if (!listings.length) {
+          return "Hmm, I didn't find anything matching. Want to broaden the search — different year, higher budget, or a wider radius?";
+        }
+        const prices = listings.map((l) => l.price).filter(Boolean).sort((a, b) => a - b);
+        const min = prices[0], max = prices[prices.length - 1];
+        const median = prices[Math.floor(prices.length / 2)];
+        const where = params.city ? `${params.city}${params.state ? ", " + params.state : ""}` : "your area";
+        const what =
+          params.make && params.model ? `${params.make} ${params.model}` :
+          params.make ? params.make :
+          params.body_type ? params.body_type + "s" : "cars";
+        return `Found ${listings.length} ${what} around ${where}. Prices range from ${fmtMoney(min)} to ${fmtMoney(max)}, with the median around ${fmtMoney(median)}. Sorted by price below — let me know if you want to narrow it down.`;
+      }
+
+      function SourceBadge({ source }) {
+        const s = SOURCES.find((x) => x.key === source);
+        if (!s) return null;
+        return h("span", {
+          className: `inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ring-1 ${s.color}`,
+        }, s.name);
+      }
+
+      function ListingCard({ l }) {
+        return h("a", {
+          href: l.url || "#",
+          target: "_blank",
+          rel: "noopener noreferrer",
+          className:
+            "group block bg-white rounded-2xl ring-1 ring-slate-200 overflow-hidden shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 animate-fadeIn",
+        },
+          h("div", { className: "aspect-[3/2] bg-slate-100 overflow-hidden" },
+            l.image
+              ? h("img", { src: l.image, alt: `${l.year} ${l.make} ${l.model}`, loading: "lazy",
+                  className: "w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" })
+              : h("div", { className: "w-full h-full flex items-center justify-center text-slate-400 text-sm" }, "No image")
+          ),
+          h("div", { className: "p-4 space-y-2" },
+            h("div", { className: "flex items-start justify-between gap-2" },
+              h("h3", { className: "font-semibold text-slate-900 leading-snug" },
+                `${l.year} ${l.make} ${l.model}${l.trim ? " " + l.trim : ""}`),
+              h(SourceBadge, { source: l.source })
+            ),
+            h("div", { className: "flex items-baseline justify-between" },
+              h("div", { className: "text-2xl font-bold text-brand-700" }, fmtMoney(l.price)),
+              h("div", { className: "text-sm text-slate-500" }, fmtMiles(l.mileage))
+            ),
+            h("div", { className: "flex items-center justify-between text-xs text-slate-500" },
+              h("div", null,
+                l.city ? `${l.city}${l.distance != null ? ` · ${l.distance} mi away` : ""}` :
+                l.distance != null ? `${l.distance} mi away` : ""),
+              h("span", { className: "text-brand-600 group-hover:text-brand-700 font-medium" },
+                `View on ${l.sourceName} →`)
+            )
+          )
+        );
+      }
+      function SkeletonCard() {
+        return h("div", { className: "bg-white rounded-2xl ring-1 ring-slate-200 overflow-hidden" },
+          h("div", { className: "aspect-[3/2] skeleton animate-shimmer" }),
+          h("div", { className: "p-4 space-y-3" },
+            h("div", { className: "h-4 w-3/4 rounded skeleton animate-shimmer" }),
+            h("div", { className: "h-6 w-1/2 rounded skeleton animate-shimmer" }),
+            h("div", { className: "h-3 w-2/3 rounded skeleton animate-shimmer" })
+          )
+        );
+      }
+
+      function TypingDots() {
+        return h("div", { className: "flex gap-1 items-center px-1 py-1" },
+          h("span", { className: "w-1.5 h-1.5 bg-slate-400 rounded-full animate-pulseDot" }),
+          h("span", { className: "w-1.5 h-1.5 bg-slate-400 rounded-full animate-pulseDot", style: { animationDelay: "0.15s" } }),
+          h("span", { className: "w-1.5 h-1.5 bg-slate-400 rounded-full animate-pulseDot", style: { animationDelay: "0.3s" } })
+        );
+      }
+
+      function Bubble({ role, children }) {
+        const isUser = role === "user";
+        return h("div", { className: `flex ${isUser ? "justify-end" : "justify-start"} animate-fadeIn` },
+          !isUser && h("div", {
+            className: "shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-brand-500 to-violet-500 mr-2 mt-1 flex items-center justify-center text-white text-xs font-bold",
+          }, "C"),
+          h("div", {
+            className: `max-w-[88%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+              isUser ? "bg-brand-600 text-white rounded-br-sm"
+                     : "bg-white ring-1 ring-slate-200 text-slate-800 rounded-bl-sm"
+            }`,
+          }, children)
+        );
+      }
+
+      function CriteriaChip({ label, value }) {
+        if (value == null || value === "" || value === "any") return null;
+        return h("span", {
+          className: "inline-flex items-center gap-1.5 text-xs font-medium bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full ring-1 ring-slate-200",
+        }, h("span", { className: "text-slate-500" }, `${label}:`), h("span", null, value));
+      }
+
+      // ----------------------------- App ---------------------------------------
+      const STORAGE = {
+        mode: "carscout_mode",
+        proxy: "carscout_proxy",
+      };
+
+      const GREETING = `Hi! I'm CarScout. Tell me what kind of car you're after — make, model, year, budget — and where you're looking. I search nationwide; if you don't mention a city I'll default to Atlanta.`;
+
+      function App() {
+        const [mode, setMode] = useState(() => localStorage.getItem(STORAGE.mode) || "demo");
+        const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem(STORAGE.proxy) || "");
+        const [showSettings, setShowSettings] = useState(false);
+
+        const [messages, setMessages] = useState(() => [{ id: "g0", role: "assistant", text: GREETING }]);
+        const [input, setInput] = useState("");
+        const [busy, setBusy] = useState(false);
+
+        const [parsed, setParsed] = useState(null);
+        const [listings, setListings] = useState([]);
+        const [searching, setSearching] = useState(false);
+        const [sourceStatuses, setSourceStatuses] = useState({});
+        const [sortBy, setSortBy] = useState("price");
+
+        const chatRef = useRef(null);
+        const inputRef = useRef(null);
+
+        useEffect(() => { localStorage.setItem(STORAGE.mode, mode); }, [mode]);
+        useEffect(() => { localStorage.setItem(STORAGE.proxy, proxyUrl); }, [proxyUrl]);
+        useEffect(() => {
+          if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+        }, [messages]);
+        useEffect(() => { inputRef.current?.focus(); }, []);
+
+        function appendMessage(msg) {
+          setMessages((prev) => [...prev, { id: `m${prev.length}-${Date.now()}`, ...msg }]);
+        }
+
+        const runSearch = useCallback(async (params) => {
+          setSearching(true);
+          setSourceStatuses({});
+          try {
+            if (mode === "demo") {
+              for (const s of SOURCES) {
+                setSourceStatuses((p) => ({ ...p, [s.key]: "fetching" }));
+                await new Promise((r) => setTimeout(r, 180 + Math.random() * 240));
+                setSourceStatuses((p) => ({ ...p, [s.key]: "ok" }));
+              }
+              const list = generateMockListings(params);
+              setListings(list);
+              return list;
+            } else {
+              if (!proxyUrl) {
+                appendMessage({ role: "assistant", text: "Live mode is on but no CORS proxy is configured. Open ⚙ settings or switch back to Demo." });
+                setListings([]);
+                return [];
+              }
+              const { listings: live } = await fetchLiveListings(
+                params, proxyUrl,
+                (key, status) => setSourceStatuses((p) => ({ ...p, [key]: status }))
+              );
+              setListings(live);
+              return live;
+            }
+          } finally {
+            setSearching(false);
+          }
+        }, [mode, proxyUrl]);
+
+        async function handleSubmit(rawText) {
+          const text = (rawText ?? input).trim();
+          if (!text || busy) return;
+          setInput("");
+          appendMessage({ role: "user", text });
+          setBusy(true);
+
+          let extracted = {};
+          let usedFallback = false;
+          let fallbackReason = "";
+          try {
+            extracted = await parseViaProxy(text, parsed);
+          } catch (e) {
+            usedFallback = true;
+            fallbackReason = e?.status === 429
+              ? "(rate-limited — using built-in parser)"
+              : "(parser offline — using built-in parser)";
+            extracted = parseWithRegex(text);
+            // For the fallback, fold previous params under new ones
+            if (parsed) extracted = { ...parsed, ...extracted };
+            if (!extracted.ack_message) extracted.ack_message = buildAckMessage({
+              ...extracted,
+              city: extracted.city || DEFAULT_LOCATION.city,
+              state: extracted.state || DEFAULT_LOCATION.state,
+            });
+          }
+
+          // Apply defaults (location, radius, price)
+          const params = {
+            ...extracted,
+            make: extracted.make ? canonicalizeMake(extracted.make) : undefined,
+            city: extracted.city || DEFAULT_LOCATION.city,
+            state: extracted.state || DEFAULT_LOCATION.state,
+            zip: extracted.zip || DEFAULT_LOCATION.zip,
+            radius_miles: extracted.radius_miles || DEFAULT_RADIUS,
+            price_max: extracted.price_max || 50000,
+          };
+          setParsed(params);
+
+          const ack = params.ack_message || buildAckMessage(params);
+          appendMessage({
+            role: "assistant",
+            text: usedFallback ? `${ack} ${fallbackReason}` : ack,
+          });
+
+          const list = await runSearch(params);
+          appendMessage({
+            role: "assistant",
+            text: buildResultSummary(params, list || []),
+          });
+          setBusy(false);
+        }
+
+        const resetChat = () => {
+          setMessages([{ id: "g0", role: "assistant", text: GREETING }]);
+          setParsed(null);
+          setListings([]);
+          setSourceStatuses({});
+          setInput("");
+          setTimeout(() => inputRef.current?.focus(), 30);
+        };
+
+        const sortedListings = useMemo(() => {
+          const arr = [...listings];
+          arr.sort((a, b) => {
+            if (sortBy === "price") return (a.price ?? Infinity) - (b.price ?? Infinity);
+            if (sortBy === "distance") return (a.distance ?? Infinity) - (b.distance ?? Infinity);
+            if (sortBy === "mileage") return (a.mileage ?? Infinity) - (b.mileage ?? Infinity);
+            return 0;
+          });
+          return arr;
+        }, [listings, sortBy]);
+
+        const locationLabel = parsed?.city ? `${parsed.city}, ${parsed.state || ""}` : `${DEFAULT_LOCATION.city}, ${DEFAULT_LOCATION.state}`;
+
+        return h("div", { className: "min-h-screen" },
+          // Header
+          h("header", { className: "sticky top-0 z-20 bg-white/80 backdrop-blur ring-1 ring-slate-200" },
+            h("div", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3" },
+              h("div", { className: "flex items-center gap-3" },
+                h("div", {
+                  className: "w-8 h-8 rounded-xl bg-gradient-to-br from-brand-500 to-violet-500 flex items-center justify-center text-white font-bold text-sm",
+                }, "C"),
+                h("h1", { className: "font-bold text-slate-900 text-lg" }, "CarScout"),
+                h("span", { className: "hidden sm:inline text-xs text-slate-500" },
+                  `Nationwide · default ${DEFAULT_LOCATION.city}, ${DEFAULT_LOCATION.state}`)
+              ),
+              h("div", { className: "flex items-center gap-2" },
+                h("div", { className: "flex items-center bg-slate-100 rounded-full p-0.5 text-xs font-medium" },
+                  ["demo", "live"].map((m) =>
+                    h("button", {
+                      key: m,
+                      onClick: () => setMode(m),
+                      className: `px-3 py-1.5 rounded-full transition ${
+                        mode === m ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-800"
+                      }`,
+                    }, m === "demo" ? "Demo" : "Live")
+                  )
+                ),
+                h("button", {
+                  onClick: () => setShowSettings((s) => !s),
+                  className: "text-sm px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100",
+                  title: "Settings",
+                }, "⚙"),
+                h("button", {
+                  onClick: resetChat,
+                  className: "text-sm px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100",
+                }, "Reset chat")
+              )
+            ),
+            showSettings &&
+              h("div", { className: "border-t border-slate-200 bg-slate-50" },
+                h("div", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-4" },
+                  h("label", { className: "block text-xs font-semibold text-slate-700 mb-1" },
+                    "CORS proxy URL (Live mode only)"),
+                  h("input", {
+                    type: "text",
+                    value: proxyUrl,
+                    onChange: (e) => setProxyUrl(e.target.value),
+                    placeholder: "https://your-worker.example.workers.dev/?url=",
+                    className: "w-full px-3 py-2 rounded-lg ring-1 ring-slate-300 outline-none text-sm font-mono bg-white",
+                  }),
+                  h("p", { className: "mt-1 text-xs text-slate-500" },
+                    "Live mode appends the listing URL to this prefix. Sites may still rate-limit or block. See README for a sample Cloudflare Worker.")
+                )
+              )
+          ),
+
+          // Body
+          h("main", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6" },
+
+            // Chat column
+            h("section", {
+              className: "lg:col-span-5 xl:col-span-4 flex flex-col bg-white rounded-3xl ring-1 ring-slate-200 shadow-sm overflow-hidden lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)]",
+            },
+              h("div", {
+                ref: chatRef,
+                className: "chat-scroll flex-1 overflow-y-auto p-4 space-y-3 min-h-[360px] lg:min-h-0",
+              },
+                messages.map((m) => h(Bubble, { key: m.id, role: m.role }, m.text)),
+                busy && h("div", { className: "flex justify-start animate-fadeIn" },
+                  h("div", {
+                    className: "shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-brand-500 to-violet-500 mr-2 mt-1 flex items-center justify-center text-white text-xs font-bold",
+                  }, "C"),
+                  h("div", { className: "bg-white ring-1 ring-slate-200 rounded-2xl rounded-bl-sm px-3 py-2" },
+                    h(TypingDots)
+                  )
+                )
+              ),
+              h("div", { className: "border-t border-slate-200 p-3 bg-slate-50/60" },
+                h("form", {
+                  onSubmit: (e) => { e.preventDefault(); handleSubmit(); },
+                  className: "flex gap-2",
+                },
+                  h("input", {
+                    ref: inputRef,
+                    type: "text",
+                    value: input,
+                    onChange: (e) => setInput(e.target.value),
+                    placeholder: busy ? "Working…" : "1999 vw jetta in Seattle…",
+                    disabled: busy,
+                    className: "flex-1 px-4 py-2.5 rounded-xl ring-1 ring-slate-300 focus:ring-2 focus:ring-brand-500 outline-none text-sm bg-white disabled:opacity-60",
+                  }),
+                  h("button", {
+                    type: "submit",
+                    disabled: busy || !input.trim(),
+                    className: "px-4 py-2.5 rounded-xl bg-brand-600 text-white font-semibold text-sm hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition",
+                  }, "Send")
+                ),
+                messages.length === 1 &&
+                  h("div", { className: "mt-2 flex flex-wrap gap-1.5" },
+                    [
+                      "1999 vw jetta",
+                      "Toyota Tacoma under $25k in Austin",
+                      "manual miata in Portland",
+                      "electric SUV near Seattle",
+                    ].map((ex) =>
+                      h("button", {
+                        key: ex,
+                        type: "button",
+                        onClick: () => handleSubmit(ex),
+                        className: "text-xs px-2.5 py-1 rounded-full bg-white ring-1 ring-slate-200 text-slate-700 hover:ring-brand-300 hover:text-brand-700 transition",
+                      }, ex)
+                    )
+                  )
+              )
+            ),
+
+            // Listings column
+            h("section", { className: "lg:col-span-7 xl:col-span-8 space-y-4" },
+              parsed && h("div", { className: "bg-white rounded-2xl ring-1 ring-slate-200 p-4 space-y-3" },
+                h("div", { className: "flex flex-wrap items-center gap-2" },
+                  h("span", { className: "text-xs font-semibold text-slate-500 uppercase tracking-wide" }, "Searching:"),
+                  h(CriteriaChip, { label: "Where", value: locationLabel }),
+                  parsed.make && h(CriteriaChip, { label: "Make", value: parsed.make }),
+                  parsed.model && h(CriteriaChip, { label: "Model", value: parsed.model }),
+                  parsed.body_type && h(CriteriaChip, { label: "Body", value: parsed.body_type }),
+                  parsed.year_min && h(CriteriaChip, {
+                    label: "Year",
+                    value: parsed.year_min === parsed.year_max
+                      ? String(parsed.year_min)
+                      : `${parsed.year_min}–${parsed.year_max || CURRENT_YEAR}`,
+                  }),
+                  parsed.price_max && h(CriteriaChip, { label: "Max", value: fmtMoney(parsed.price_max) }),
+                  parsed.mileage_max && h(CriteriaChip, { label: "Miles", value: fmtMiles(parsed.mileage_max) }),
+                  parsed.new_or_used && parsed.new_or_used !== "any" && h(CriteriaChip, { label: "Cond", value: parsed.new_or_used }),
+                  parsed.transmission && parsed.transmission !== "any" && h(CriteriaChip, { label: "Trans", value: parsed.transmission }),
+                  parsed.fuel_type && parsed.fuel_type !== "any" && h(CriteriaChip, { label: "Fuel", value: parsed.fuel_type })
+                ),
+                h("div", { className: "flex flex-wrap items-center justify-between gap-3" },
+                  h("div", { className: "flex flex-wrap items-center gap-3" },
+                    SOURCES.map((s) => {
+                      const status = sourceStatuses[s.key];
+                      const dot =
+                        status === "ok" ? "bg-emerald-500"
+                        : status === "empty" ? "bg-slate-400"
+                        : status === "blocked" ? "bg-rose-500"
+                        : status === "fetching" ? "bg-amber-400 animate-pulse"
+                        : "bg-slate-300";
+                      const label = status === "blocked" ? `${s.name}: blocked`
+                                   : status === "empty" ? `${s.name}: no results` : s.name;
+                      return h("div", { key: s.key, className: "flex items-center gap-1.5 text-xs text-slate-600" },
+                        h("span", { className: `w-2 h-2 rounded-full ${dot}` }), label);
+                    })
+                  ),
+                  listings.length > 0 && h("div", { className: "flex items-center gap-2 text-sm" },
+                    h("span", { className: "text-slate-500" }, `${listings.length} listings`),
+                    h("select", {
+                      value: sortBy, onChange: (e) => setSortBy(e.target.value),
+                      className: "px-2 py-1.5 rounded-lg ring-1 ring-slate-300 bg-white text-sm",
+                    },
+                      h("option", { value: "price" }, "Sort: Price ↑"),
+                      h("option", { value: "distance" }, "Sort: Distance"),
+                      h("option", { value: "mileage" }, "Sort: Mileage")
+                    )
+                  )
+                )
+              ),
+
+              searching &&
+                h("div", { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4" },
+                  Array.from({ length: 6 }).map((_, i) => h(SkeletonCard, { key: i }))
+                ),
+
+              !searching && listings.length > 0 &&
+                h("div", { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4" },
+                  sortedListings.map((l) => h(ListingCard, { key: l.id, l }))
+                ),
+
+              !searching && listings.length === 0 && !parsed &&
+                h("div", { className: "bg-white rounded-3xl ring-1 ring-slate-200 p-10 text-center" },
+                  h("div", { className: "max-w-md mx-auto space-y-3" },
+                    h("div", { className: "text-4xl" }, "🚗"),
+                    h("h2", { className: "text-xl font-bold text-slate-900" }, "Talk to CarScout"),
+                    h("p", { className: "text-sm text-slate-600" },
+                      "Use the chat to describe what you want. CarScout searches across AutoTrader, CarMax, Carvana, Cars.com, and CarGurus. Defaults to Atlanta — say a city to look elsewhere.")
+                  )
+                ),
+
+              !searching && listings.length === 0 && parsed &&
+                h("div", { className: "bg-white rounded-3xl ring-1 ring-slate-200 p-10 text-center" },
+                  h("div", { className: "text-4xl mb-2" }, "🤷"),
+                  h("h3", { className: "font-semibold text-slate-900 mb-1" }, "No listings"),
+                  h("p", { className: "text-sm text-slate-600" },
+                    mode === "live"
+                      ? "Live sources may have blocked the request. Try Demo mode or check the proxy in settings."
+                      : "Try broadening your search.")
+                )
+            )
+          ),
+
+          h("footer", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-6 text-center text-xs text-slate-400" },
+            "CarScout · personal use only · respect each listing site's terms of service")
+        );
+      }
+
+      createRoot(document.getElementById("root")).render(h(App));
+    </script>
+  </body>
+</html>
