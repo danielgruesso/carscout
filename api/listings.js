@@ -25,8 +25,13 @@ function buildMarketCheckUrl(params, apiKey) {
   const q = new URLSearchParams({ api_key: apiKey, rows: "30", start: "0" });
   if (params.make)        q.set("make",   params.make);
   if (params.model)       q.set("model",  params.model);
-  if (params.year_min)    q.set("year_min", String(params.year_min));
-  if (params.year_max)    q.set("year_max", String(params.year_max));
+  // MarketCheck ignores year_min/year_max — year filtering uses the _range form
+  // (like price_range/miles_range). Equal bounds (e.g. 2023-2023) pin one year.
+  if (params.year_min || params.year_max) {
+    const lo = params.year_min || 1900;
+    const hi = params.year_max || new Date().getFullYear() + 1;
+    q.set("year_range", `${lo}-${hi}`);
+  }
   if (params.price_max)   q.set("price_range", `0-${params.price_max}`);
   if (params.mileage_max) q.set("miles_range", `0-${params.mileage_max}`);
   if (params.zip)         q.set("zip",    params.zip);
