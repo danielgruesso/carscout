@@ -1,5 +1,13 @@
 {
+  "type": "module",
+  "scripts": {
+    "eval": "node evals/run.js"
+  },
   "dependencies": {
-    "@vercel/analytics": "^2.0.1"
+    "@vercel/analytics": "^2.0.1",
+    "langfuse": "^3.37.0"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.5"
   }
 }

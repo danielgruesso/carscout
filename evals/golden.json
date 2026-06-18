@@ -1,0 +1,95 @@
+[
+  {
+    "id": "vw-jetta-1999",
+    "query": "1999 vw jetta",
+    "expected": { "make": "Volkswagen", "model": "Jetta", "year_min": 1999, "year_max": 1999, "city": "Atlanta", "state": "GA" }
+  },
+  {
+    "id": "red-suv-seattle",
+    "query": "red SUV under 20k in Seattle",
+    "expected": { "body_type": "SUV", "price_max": 20000, "city": "Seattle", "state": "WA" }
+  },
+  {
+    "id": "manual-miata",
+    "query": "manual mazda miata",
+    "expected": { "make": "Mazda", "model": "Miata", "transmission": "manual" }
+  },
+  {
+    "id": "hybrid-truck-zip",
+    "query": "hybrid truck 78701",
+    "expected": { "body_type": "truck", "fuel_type": "hybrid", "zip": "78701", "city": "Austin", "state": "TX" }
+  },
+  {
+    "id": "chevy-silverado-chicago",
+    "query": "chevy silverado under 30000 near chicago",
+    "expected": { "make": "Chevrolet", "model": "Silverado", "price_max": 30000, "city": "Chicago", "state": "IL" }
+  },
+  {
+    "id": "electric-sedan-default-loc",
+    "query": "electric sedan under 40k",
+    "expected": { "body_type": "sedan", "fuel_type": "electric", "price_max": 40000, "city": "Atlanta", "state": "GA" }
+  },
+  {
+    "id": "bmw-3series-miles",
+    "query": "bmw 3 series with less than 60000 miles",
+    "expected": { "make": "BMW", "model": "3 Series", "mileage_max": 60000 }
+  },
+  {
+    "id": "used-civic-miami-zip",
+    "query": "used honda civic in 33101",
+    "expected": { "make": "Honda", "model": "Civic", "new_or_used": "used", "zip": "33101", "state": "FL" }
+  },
+  {
+    "id": "diesel-ram-denver",
+    "query": "diesel ram 2500 in denver",
+    "expected": { "make": "Ram", "model": "2500", "fuel_type": "diesel", "city": "Denver", "state": "CO" }
+  },
+  {
+    "id": "minivan-budget",
+    "query": "minivan for under 25k",
+    "expected": { "body_type": "minivan", "price_max": 25000 }
+  },
+  {
+    "id": "vette-shorthand",
+    "query": "vette in atlanta",
+    "expected": { "make": "Chevrolet", "model": "Corvette", "city": "Atlanta", "state": "GA" }
+  },
+  {
+    "id": "benz-c300-shorthand",
+    "query": "benz c300",
+    "expected": { "make": "Mercedes-Benz", "model": "C300" }
+  },
+  {
+    "id": "convertible-miami",
+    "query": "convertible under 35000 in miami",
+    "expected": { "body_type": "convertible", "price_max": 35000, "city": "Miami", "state": "FL" }
+  },
+  {
+    "id": "new-f150-dallas",
+    "query": "ford f-150 new in dallas",
+    "expected": { "make": "Ford", "model": "F-150", "new_or_used": "new", "city": "Dallas", "state": "TX" }
+  },
+  {
+    "id": "lifted-tacoma",
+    "query": "toyota tacoma 4x4 under 45k in phoenix",
+    "expected": { "make": "Toyota", "model": "Tacoma", "price_max": 45000, "city": "Phoenix", "state": "AZ" }
+  },
+  {
+    "id": "refine-manual-only",
+    "query": "manual only",
+    "previous": { "make": "Volkswagen", "model": "Jetta", "city": "Atlanta", "state": "GA", "price_max": 50000 },
+    "expected": { "make": "Volkswagen", "model": "Jetta", "transmission": "manual", "city": "Atlanta", "state": "GA" }
+  },
+  {
+    "id": "refine-switch-city",
+    "query": "in seattle instead",
+    "previous": { "make": "Toyota", "model": "Camry", "city": "Atlanta", "state": "GA", "price_max": 50000 },
+    "expected": { "make": "Toyota", "model": "Camry", "city": "Seattle", "state": "WA" }
+  },
+  {
+    "id": "refine-budget-and-fuel",
+    "query": "under 15k and electric",
+    "previous": { "body_type": "SUV", "city": "Atlanta", "state": "GA", "price_max": 50000 },
+    "expected": { "body_type": "SUV", "price_max": 15000, "fuel_type": "electric" }
+  }
+]

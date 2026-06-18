@@ -80,7 +80,15 @@ vercel env add MARKETCHECK_API_KEY
 - Paste your MarketCheck API key (sign up at <https://www.marketcheck.com/apis>).
 - Again, select all three environments.
 
-(Optional) override the Gemini model name:
+(Optional) add **OpenRouter** to unlock the free non-Gemini models in the model picker:
+
+```bash
+vercel env add OPENROUTER_API_KEY
+```
+
+- Get a free key at <https://openrouter.ai/keys>. This enables the `:free` models (DeepSeek V3, Llama 3.3 70B, Qwen, etc.) in the header dropdown. Without it, the dropdown just shows the Gemini models.
+
+(Optional) override the server-side default Gemini model:
 
 ```bash
 vercel env add GEMINI_MODEL
@@ -88,6 +96,8 @@ vercel env add GEMINI_MODEL
 ```
 
 If the default model isn't available on your account yet, try `gemini-2.5-flash-lite` or whatever Flash-Lite tier you have access to.
+
+(Optional) add **Langfuse** to trace latency, token cost, and quality per model — see [Model comparison & observability](#model-comparison--observability) below.
 
 > The app will still load and chat without `MARKETCHECK_API_KEY` set — it just falls back to Demo data with a one-line note. Set the var whenever you're ready to flip on real listings.
 
@@ -187,10 +197,47 @@ Use Demo mode to show the app off without burning MarketCheck credits.
 
 ---
 
+## Model comparison & observability
+
+The header has a **model picker** so you can switch which model parses your query and compare quality live. Every model offered has a real free tier:
+
+- **Google Gemini** (native) — `gemini-3.1-flash-lite`, `gemini-2.5-flash`, `gemini-2.0-flash`
+- **OpenRouter `:free`** — DeepSeek V3, Llama 3.3 70B, Qwen 2.5 72B, Mistral Small, etc.
+
+The model list is defined once in [`api/_models.js`](api/_models.js) and served to the UI by `GET /api/models`, which only advertises models whose provider key is configured. OpenRouter's `:free` ids rotate — verify current ones at <https://openrouter.ai/models?max_price=0> and edit that one file.
+
+Each assistant reply shows a small `via <model> · <latency> · <tokens>` line so you can eyeball cost/speed/quality differences.
+
+### Tracing with Langfuse
+
+If `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` are set, every live `/api/parse` call is traced to [Langfuse](https://cloud.langfuse.com) with model, latency, and token usage (→ cost). **If the keys are absent, tracing is silently skipped and the app works normally.**
+
+```bash
+vercel env add LANGFUSE_PUBLIC_KEY
+vercel env add LANGFUSE_SECRET_KEY
+```
+
+### Golden-set evals
+
+A small golden set of buyer queries with expected structured params lives in [`evals/golden.json`](evals/golden.json). Score every configured model against it:
+
+```bash
+cp .env.example .env        # fill in GEMINI_API_KEY / OPENROUTER_API_KEY (+ LANGFUSE_* to push a run)
+npm install
+npm run eval                # all configured models
+npm run eval deepseek       # only model ids containing "deepseek"
+```
+
+This prints a per-model scoreboard (field accuracy, pass@1, avg latency, avg tokens), writes `evals/results.csv`, and — if Langfuse is configured — pushes a **dataset run** so you can compare models side-by-side in the Langfuse UI. Scoring grades only the fields each case asserts (exact for categoricals, numeric for price/year, fuzzy for make/model/city); see [`evals/score.js`](evals/score.js).
+
+---
+
 ## Free tier notes
 
 - **Gemini**: per-minute and per-day quotas (varies by model). On 429, `/api/parse` falls back to a built-in regex parser with a "rate-limited" note. No crash.
+- **OpenRouter `:free`**: shared per-minute/day limits across free models. On 429 the UI falls back to the built-in regex parser, same as Gemini.
 - **MarketCheck**: per-day credits depending on plan. On 429 / 401 / not-configured, `/api/listings` falls back to Demo data with a chat note. No crash.
+- **Langfuse**: generous free cloud tier; tracing is best-effort and never blocks a response.
 - **Vercel hobby**: 500k Edge function invocations/mo, plenty for personal use.
 
 ---

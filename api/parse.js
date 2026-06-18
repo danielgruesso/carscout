@@ -1,46 +1,14 @@
-// Vercel Edge serverless function — proxies to Google Gemini.
-// The API key lives in env (GEMINI_API_KEY) so visitors don't need to bring their own.
+// Vercel Edge function — parses a buyer's query into structured search params
+// using the model the client picked, and traces the call to Langfuse.
+//
+// Routing + provider adapters live in _parse-core.js; the model registry in
+// _models.js; Langfuse client in _langfuse.js. This file is just the HTTP
+// boundary: validate → parse → trace → respond.
+
+import { parse, UpstreamError } from "./_parse-core.js";
+import { getLangfuse } from "./_langfuse.js";
 
 export const config = { runtime: "edge" };
-
-const DEFAULT_MODEL = "gemini-3.1-flash-lite";
-
-const SYSTEM_PROMPT = `You are CarScout, a friendly assistant that helps users find used and new cars across the US.
-
-Your job is to (a) parse the user's natural-language query into structured search parameters, and (b) write a short, warm acknowledgement message as if you're about to run the search.
-
-Return ONLY a JSON object — no commentary, no markdown fences.
-
-Fields:
-
-Vehicle:
-- make: string. Expand shorthand: vw→Volkswagen, chevy→Chevrolet, mb/benz→Mercedes-Benz, bimmer/beemer→BMW, caddy→Cadillac, vette→Chevrolet (model "Corvette").
-- model: string.
-- body_type: "sedan"|"SUV"|"truck"|"coupe"|"hatchback"|"minivan"|"wagon"|"convertible" if user describes body type instead of make/model.
-- year_min, year_max: integers. Single year → both equal that year. "newer"/"recent"/"late-model" → year_min = current_year - 4, year_max = current_year. (Current year: ${new Date().getFullYear()}.)
-- price_max: integer USD. Default 50000.
-- mileage_max: integer.
-- new_or_used: "new"|"used"|"any". Default "any".
-- transmission: "automatic"|"manual"|"any".
-- fuel_type: "gas"|"hybrid"|"electric"|"diesel"|"any".
-
-Location (US, nationwide search):
-- city: string. If the user mentions a US city, fill it. If not mentioned, default to "Atlanta".
-- state: 2-letter uppercase US state code. Default "GA" when city defaults to Atlanta.
-- zip: 5-digit US ZIP. If user gives a ZIP, use it; otherwise pick a reasonable downtown ZIP for the chosen city (Atlanta→30303, Seattle→98101, NYC→10001, LA→90001, Chicago→60601, etc.). Default "30303".
-- radius_miles: int, default 50.
-
-Conversation:
-- ack_message: 1-2 short, friendly sentences confirming what you understood. Mention the make/model (or body type) and the city. Sound like an assistant about to do work — e.g. "Got it — looking for 1999 VW Jettas around Atlanta. Pulling listings now." Do not list every parameter. Do not use emoji.
-
-Refinement:
-- If "previous params" appear before the user message, treat the user message as a refinement of that prior search. Merge: keep previous fields unless the user explicitly changes them. Overwrite any field the user updates. In ack_message, acknowledge the refinement ("Narrowing to manual only…", "Switching to Seattle…").
-
-Examples:
-"1999 vw jetta" → {"make":"Volkswagen","model":"Jetta","year_min":1999,"year_max":1999,"price_max":50000,"city":"Atlanta","state":"GA","zip":"30303","radius_miles":50,"ack_message":"Got it — a 1999 Volkswagen Jetta around Atlanta. Pulling listings now."}
-"red SUV under 20k in Seattle" → {"body_type":"SUV","price_max":20000,"city":"Seattle","state":"WA","zip":"98101","radius_miles":50,"ack_message":"On it — SUVs under $20k around Seattle. Searching now."}
-"manual mazda miata" → {"make":"Mazda","model":"MX-5 Miata","transmission":"manual","price_max":50000,"city":"Atlanta","state":"GA","zip":"30303","radius_miles":50,"ack_message":"Nice — manual Mazda Miatas around Atlanta. One sec."}
-"hybrid truck 78701" → {"body_type":"truck","fuel_type":"hybrid","price_max":50000,"city":"Austin","state":"TX","zip":"78701","radius_miles":50,"ack_message":"Hybrid trucks around Austin — searching."}`;
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
@@ -59,11 +27,6 @@ export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return json({ error: "server_not_configured", detail: "GEMINI_API_KEY env var missing" }, 500);
-  }
-
   let body;
   try {
     body = await req.json();
@@ -72,60 +35,62 @@ export default async function handler(req) {
   }
   const query = body?.query;
   const previous = body?.previous || null;
+  const requestedModel = body?.model;
 
   if (!query || typeof query !== "string" || query.trim().length === 0) {
     return json({ error: "missing_query" }, 400);
   }
   if (query.length > 500) return json({ error: "query_too_long" }, 400);
 
-  const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-
-  const userContent = previous
-    ? `previous params: ${JSON.stringify(previous)}\n\nuser message: ${query}`
-    : query;
+  const lf = getLangfuse();
+  const trace = lf?.trace({
+    name: "parse",
+    input: { query, previous },
+    metadata: { requestedModel: requestedModel || null },
+    tags: ["carscout", "parse"],
+  });
+  const startTime = new Date();
 
   try {
-    const upstream = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": apiKey,
+    const result = await parse({ query, previous, model: requestedModel });
+
+    // Record the generation so Langfuse shows latency + token usage + cost.
+    trace?.generation({
+      name: "parse",
+      model: result.model,
+      startTime,
+      endTime: new Date(),
+      input: { query, previous },
+      output: result.params,
+      usage: {
+        input: result.usage.promptTokens ?? undefined,
+        output: result.usage.completionTokens ?? undefined,
+        total: result.usage.totalTokens ?? undefined,
+        unit: "TOKENS",
       },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: "user", parts: [{ text: userContent }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 400,
-          responseMimeType: "application/json",
-        },
-      }),
+      metadata: { provider: result.provider, latencyMs: result.latencyMs },
     });
+    trace?.update({ output: result.params });
 
-    if (!upstream.ok) {
-      const text = await upstream.text();
-      // Forward rate-limit signal so the UI can show a friendly note
-      if (upstream.status === 429) {
-        return json({ error: "rate_limited", detail: text.slice(0, 300) }, 429);
-      }
-      return json({ error: "gemini_upstream", status: upstream.status, detail: text.slice(0, 400) }, 502);
-    }
-
-    const data = await upstream.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const content = parts.map((p) => p.text || "").join("");
-    const cleaned = content.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-    let parsed;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      const m = cleaned.match(/\{[\s\S]*\}/);
-      if (!m) return json({ error: "invalid_json_from_model", detail: cleaned.slice(0, 300) }, 502);
-      parsed = JSON.parse(m[0]);
-    }
-    return json(parsed, 200);
+    return json(
+      {
+        ...result.params,
+        meta: {
+          model: result.model,
+          provider: result.provider,
+          latencyMs: result.latencyMs,
+          usage: result.usage,
+        },
+      },
+      200
+    );
   } catch (e) {
-    return json({ error: "fetch_failed", detail: (e && e.message) || String(e) }, 502);
+    const code = e?.code || "fetch_failed";
+    const status = e instanceof UpstreamError ? e.status : 502;
+    trace?.update({ output: { error: code }, metadata: { error: code, detail: e?.detail } });
+    return json({ error: code, detail: e?.detail || (e && e.message) || String(e) }, status);
+  } finally {
+    // Serverless: must flush before the function suspends or events are lost.
+    if (lf) await lf.flushAsync().catch(() => {});
   }
 }

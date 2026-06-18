@@ -4,3 +4,7 @@
 .env*.local
 node_modules
 .DS_Store
+
+# Local eval artifact; evals/summary.json IS committed (feeds the eval banner).
+evals/results.csv
+.env*

@@ -1,0 +1,94 @@
+{
+  "generatedAt": "2026-06-18T19:42:51.866Z",
+  "datasetSize": 18,
+  "models": [
+    {
+      "id": "gemini-3.1-flash-lite",
+      "label": "Gemini 3.1 Flash-Lite",
+      "provider": "gemini",
+      "accuracy": 0.944,
+      "pass1": 17,
+      "total": 18,
+      "avgLatencyMs": 540,
+      "avgTokens": 242,
+      "errors": 0
+    },
+    {
+      "id": "openai/gpt-oss-120b:free",
+      "label": "GPT-OSS 120B (free)",
+      "provider": "openrouter",
+      "accuracy": 0.917,
+      "pass1": 15,
+      "total": 18,
+      "avgLatencyMs": 1180,
+      "avgTokens": 268,
+      "errors": 0
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash",
+      "provider": "gemini",
+      "accuracy": 0.903,
+      "pass1": 15,
+      "total": 18,
+      "avgLatencyMs": 1320,
+      "avgTokens": 251,
+      "errors": 0
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "label": "Gemini 2.0 Flash",
+      "provider": "gemini",
+      "accuracy": 0.889,
+      "pass1": 14,
+      "total": 18,
+      "avgLatencyMs": 760,
+      "avgTokens": 245,
+      "errors": 0
+    },
+    {
+      "id": "meta-llama/llama-3.3-70b-instruct:free",
+      "label": "Llama 3.3 70B (free)",
+      "provider": "openrouter",
+      "accuracy": 0.875,
+      "pass1": 14,
+      "total": 18,
+      "avgLatencyMs": 1490,
+      "avgTokens": 284,
+      "errors": 0
+    },
+    {
+      "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "label": "Qwen3 Next 80B (free)",
+      "provider": "openrouter",
+      "accuracy": 0.847,
+      "pass1": 13,
+      "total": 18,
+      "avgLatencyMs": 1660,
+      "avgTokens": 277,
+      "errors": 0
+    },
+    {
+      "id": "nousresearch/hermes-3-llama-3.1-405b:free",
+      "label": "Hermes 3 405B (free)",
+      "provider": "openrouter",
+      "accuracy": 0.833,
+      "pass1": 12,
+      "total": 18,
+      "avgLatencyMs": 2140,
+      "avgTokens": 296,
+      "errors": 0
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "label": "Gemma 4 31B (free)",
+      "provider": "openrouter",
+      "accuracy": 0.806,
+      "pass1": 12,
+      "total": 18,
+      "avgLatencyMs": 1240,
+      "avgTokens": 263,
+      "errors": 1
+    }
+  ]
+}

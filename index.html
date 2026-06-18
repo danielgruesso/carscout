@@ -460,11 +460,11 @@
       }
 
       // ----------------------------- Proxy parse -------------------------------
-      async function parseViaProxy(query, previous) {
+      async function parseViaProxy(query, previous, model) {
         const res = await fetch(PARSE_ENDPOINT, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ query, previous: previous || null }),
+          body: JSON.stringify({ query, previous: previous || null, model: model || null }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -496,6 +496,16 @@
       }
 
       // ----------------------------- UI helpers --------------------------------
+      // Compact "via <model> · 612ms · 248 tok" line shown under an ack bubble.
+      function formatParseMeta(meta) {
+        if (!meta) return null;
+        const bits = [`via ${meta.model}`];
+        if (typeof meta.latencyMs === "number") bits.push(`${meta.latencyMs}ms`);
+        const tot = meta.usage?.totalTokens;
+        if (typeof tot === "number") bits.push(`${tot} tok`);
+        return bits.join(" · ");
+      }
+
       const fmtMoney = (n) => n == null || Number.isNaN(n) ? "—" : "$" + Math.round(n).toLocaleString();
       const fmtMiles = (n) => n == null || Number.isNaN(n) ? "—" : Math.round(n).toLocaleString() + " mi";
 
@@ -600,12 +610,145 @@
       // ----------------------------- App ---------------------------------------
       const STORAGE = {
         mode: "carscout_mode",
+        model: "carscout_model",
+        evalCollapsed: "carscout_eval_collapsed",
       };
+
+      const MODELS_ENDPOINT = "/api/models";
+      const EVAL_ENDPOINT = "/api/eval-summary";
+      // Used until /api/models responds (and if it ever fails). Mirrors the
+      // server registry in api/_models.js.
+      const FALLBACK_MODELS = [
+        { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite", provider: "gemini" },
+        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "gemini" },
+        { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash", provider: "gemini" },
+      ];
+      const DEFAULT_MODEL_ID = "gemini-3.1-flash-lite";
+      const PROVIDER_LABELS = { gemini: "Google Gemini", openrouter: "OpenRouter (free)" };
 
       const GREETING = `Hi! I'm CarScout. Tell me what kind of car you're after — make, model, year, budget — and where you're looking. I search nationwide; if you don't mention a city I'll default to Atlanta.`;
 
+      function timeAgo(iso) {
+        if (!iso) return null;
+        const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+        if (secs < 60) return `${secs}s ago`;
+        const mins = Math.round(secs / 60);
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        return `${Math.round(hrs / 24)}d ago`;
+      }
+
+      const accColor = (a) =>
+        a >= 0.85 ? "bg-emerald-400" : a >= 0.6 ? "bg-amber-400" : "bg-rose-400";
+
+      // Full-width homepage banner: live golden-set eval results per model.
+      // Polls /api/eval-summary (produced by `npm run eval`) and highlights the
+      // currently selected model + the current leader.
+      function EvalBanner({ selectedModel }) {
+        const [data, setData] = useState(null);
+        const [collapsed, setCollapsed] = useState(
+          () => localStorage.getItem(STORAGE.evalCollapsed) === "1"
+        );
+
+        useEffect(() => {
+          localStorage.setItem(STORAGE.evalCollapsed, collapsed ? "1" : "0");
+        }, [collapsed]);
+
+        useEffect(() => {
+          let alive = true;
+          const empty = { generatedAt: null, models: [] };
+          const load = () =>
+            fetch(EVAL_ENDPOINT)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((d) => { if (!alive) return; if (d) setData(d); else setData((cur) => cur || empty); })
+              // On a failed first fetch, fall back to empty state (not stuck loading).
+              .catch(() => { if (alive) setData((cur) => cur || empty); });
+          load();
+          const t = setInterval(load, 60000); // refresh without a page reload
+          return () => { alive = false; clearInterval(t); };
+        }, []);
+
+        const models = data?.models || [];
+        const hasRun = Boolean(data?.generatedAt) && models.length > 0;
+        const leader = hasRun ? models.reduce((a, b) => (b.accuracy > a.accuracy ? b : a)) : null;
+        const updated = timeAgo(data?.generatedAt);
+
+        const subtitle = !data
+          ? "loading eval results…"
+          : hasRun
+          ? `${data.datasetSize} buyer queries · updated ${updated}`
+          : "no eval runs yet";
+
+        const card = (m) => {
+          const selected = m.id === selectedModel;
+          const isLeader = leader && m.id === leader.id;
+          return h("div", {
+            key: m.id,
+            title: m.id,
+            className: `shrink-0 w-36 rounded-lg px-2.5 py-1.5 ring-1 ${
+              selected ? "ring-brand-400 bg-white/15" : "ring-white/10 bg-white/5"
+            }`,
+          },
+            h("div", { className: "flex items-center gap-1.5 mb-0.5" },
+              isLeader && h("span", { className: "text-amber-300 text-xs" }, "★"),
+              h("span", { className: "text-xs font-medium truncate flex-1" }, m.label || m.id),
+              selected && h("span", { className: "text-[10px] px-1 rounded bg-brand-500/80 text-white" }, "in use")
+            ),
+            h("div", { className: "flex items-baseline gap-1" },
+              h("span", { className: "text-base font-bold leading-none" }, `${Math.round(m.accuracy * 100)}%`),
+              h("span", { className: "text-[10px] text-white/50" }, "acc")
+            ),
+            h("div", { className: "h-1 rounded-full bg-white/15 my-1 overflow-hidden" },
+              h("div", {
+                className: `h-full rounded-full ${accColor(m.accuracy)}`,
+                style: { width: `${Math.round(m.accuracy * 100)}%` },
+              })
+            ),
+            h("div", { className: "text-[11px] text-white/60 font-mono" },
+              `${m.pass1}/${m.total} · ${m.avgLatencyMs ?? "—"}ms · ${m.avgTokens ?? "—"}tok` +
+                (m.errors ? ` · ${m.errors}!` : "")
+            )
+          );
+        };
+
+        return h("section", {
+          className: "shrink-0 w-full bg-gradient-to-r from-slate-900 via-slate-900 to-violet-900 text-white border-t border-white/10",
+        },
+          h("div", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-1.5" },
+            // Top row
+            h("div", { className: "flex items-center justify-between gap-3" },
+              h("div", { className: "flex items-center gap-2 min-w-0" },
+                h("span", { className: "w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" }),
+                h("span", { className: "text-sm font-semibold shrink-0" }, "Model eval"),
+                h("span", { className: "text-xs text-white/50 truncate" }, subtitle),
+                collapsed && leader && h("span", { className: "hidden sm:inline text-xs text-white/70 shrink-0" },
+                  `· ★ ${leader.label || leader.id} ${Math.round(leader.accuracy * 100)}%`)
+              ),
+              h("button", {
+                onClick: () => setCollapsed((c) => !c),
+                className: "text-xs text-white/70 hover:text-white px-2 py-1 rounded shrink-0",
+              }, collapsed ? "Show scores ▾" : "Hide ▴")
+            ),
+            // Model cards / empty state
+            !collapsed && h("div", { className: "mt-1.5 flex gap-2 overflow-x-auto pb-1" },
+              hasRun
+                ? models.map(card)
+                : h("div", { className: "text-xs text-white/60 py-2" },
+                    data
+                      ? h("span", null, "Run ", h("code", { className: "px-1 rounded bg-white/10" }, "npm run eval"),
+                          " to populate live model scores.")
+                      : "Loading…"
+                  )
+            )
+          )
+        );
+      }
+
       function App() {
         const [mode, setMode] = useState(() => localStorage.getItem(STORAGE.mode) || "live");
+        const [models, setModels] = useState(FALLBACK_MODELS);
+        const [model, setModel] = useState(() => localStorage.getItem(STORAGE.model) || DEFAULT_MODEL_ID);
 
         const [messages, setMessages] = useState(() => [{ id: "g0", role: "assistant", text: GREETING }]);
         const [input, setInput] = useState("");
@@ -621,6 +764,25 @@
         const inputRef = useRef(null);
 
         useEffect(() => { localStorage.setItem(STORAGE.mode, mode); }, [mode]);
+        useEffect(() => { localStorage.setItem(STORAGE.model, model); }, [model]);
+
+        // Pull the live model registry so the dropdown only offers models whose
+        // provider key is actually configured on this deployment.
+        useEffect(() => {
+          let cancelled = false;
+          fetch(MODELS_ENDPOINT)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              if (cancelled || !data?.models?.length) return;
+              setModels(data.models);
+              // If the saved model isn't offered here, fall back to the server default.
+              setModel((cur) =>
+                data.models.some((m) => m.id === cur) ? cur : (data.default || data.models[0].id)
+              );
+            })
+            .catch(() => {});
+          return () => { cancelled = true; };
+        }, []);
         useEffect(() => {
           if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
         }, [messages]);
@@ -685,8 +847,14 @@
           let extracted = {};
           let usedFallback = false;
           let fallbackReason = "";
+          let parseMeta = null;
           try {
-            extracted = await parseViaProxy(text, parsed);
+            extracted = await parseViaProxy(text, parsed, model);
+            if (extracted && extracted.meta) {
+              parseMeta = extracted.meta;
+              const { meta, ...rest } = extracted;
+              extracted = rest;
+            }
           } catch (e) {
             usedFallback = true;
             fallbackReason = e?.status === 429
@@ -718,6 +886,7 @@
           appendMessage({
             role: "assistant",
             text: usedFallback ? `${ack} ${fallbackReason}` : ack,
+            meta: parseMeta ? formatParseMeta(parseMeta) : (usedFallback ? "built-in regex parser" : null),
           });
 
           const list = await runSearch(params);
@@ -750,9 +919,9 @@
 
         const locationLabel = parsed?.city ? `${parsed.city}, ${parsed.state || ""}` : `${DEFAULT_LOCATION.city}, ${DEFAULT_LOCATION.state}`;
 
-        return h("div", { className: "min-h-screen" },
+        return h("div", { className: "flex flex-col min-h-screen lg:h-screen lg:min-h-0 lg:overflow-hidden" },
           // Header
-          h("header", { className: "sticky top-0 z-20 bg-white/80 backdrop-blur ring-1 ring-slate-200" },
+          h("header", { className: "shrink-0 sticky top-0 z-20 bg-white/80 backdrop-blur ring-1 ring-slate-200" },
             h("div", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3" },
               h("div", { className: "flex items-center gap-3" },
                 h("div", {
@@ -763,6 +932,24 @@
                   `Nationwide · default ${DEFAULT_LOCATION.city}, ${DEFAULT_LOCATION.state}`)
               ),
               h("div", { className: "flex items-center gap-2" },
+                // Model picker — switch the parser model to compare quality.
+                h("select", {
+                  value: model,
+                  onChange: (e) => setModel(e.target.value),
+                  title: "Parser model",
+                  className: "text-xs font-medium rounded-lg ring-1 ring-slate-300 bg-white px-2 py-1.5 text-slate-700 hover:ring-slate-400 focus:ring-2 focus:ring-brand-500 outline-none max-w-[10rem] sm:max-w-none",
+                },
+                  Object.entries(
+                    models.reduce((acc, m) => {
+                      (acc[m.provider] = acc[m.provider] || []).push(m);
+                      return acc;
+                    }, {})
+                  ).map(([provider, list]) =>
+                    h("optgroup", { key: provider, label: PROVIDER_LABELS[provider] || provider },
+                      list.map((m) => h("option", { key: m.id, value: m.id }, m.label || m.id))
+                    )
+                  )
+                ),
                 h("div", { className: "flex items-center bg-slate-100 rounded-full p-0.5 text-xs font-medium" },
                   ["demo", "live"].map((m) =>
                     h("button", {
@@ -783,17 +970,24 @@
           ),
 
           // Body
-          h("main", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6" },
+          h("main", { className: "w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:flex-1 lg:min-h-0 lg:overflow-hidden lg:grid-rows-[minmax(0,1fr)]" },
 
             // Chat column
             h("section", {
-              className: "lg:col-span-5 xl:col-span-4 flex flex-col bg-white rounded-3xl ring-1 ring-slate-200 shadow-sm overflow-hidden lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)]",
+              className: "lg:col-span-5 xl:col-span-4 flex flex-col bg-white rounded-3xl ring-1 ring-slate-200 shadow-sm overflow-hidden lg:min-h-0",
             },
               h("div", {
                 ref: chatRef,
                 className: "chat-scroll flex-1 overflow-y-auto p-4 space-y-3 min-h-[360px] lg:min-h-0",
               },
-                messages.map((m) => h(Bubble, { key: m.id, role: m.role }, m.text)),
+                messages.map((m) => h(Bubble, { key: m.id, role: m.role },
+                  m.meta
+                    ? [
+                        h("div", { key: "t" }, m.text),
+                        h("div", { key: "x", className: "mt-1 text-[11px] text-slate-400 font-mono" }, m.meta),
+                      ]
+                    : m.text
+                )),
                 busy && h("div", { className: "flex justify-start animate-fadeIn" },
                   h("div", {
                     className: "shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-brand-500 to-violet-500 mr-2 mt-1 flex items-center justify-center text-white text-xs font-bold",
@@ -843,7 +1037,7 @@
             ),
 
             // Listings column
-            h("section", { className: "lg:col-span-7 xl:col-span-8 space-y-4" },
+            h("section", { className: "lg:col-span-7 xl:col-span-8 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" },
               parsed && h("div", { className: "bg-white rounded-2xl ring-1 ring-slate-200 p-4 space-y-3" },
                 h("div", { className: "flex flex-wrap items-center gap-2" },
                   h("span", { className: "text-xs font-semibold text-slate-500 uppercase tracking-wide" }, "Searching:"),
@@ -925,7 +1119,10 @@
             )
           ),
 
-          h("footer", { className: "max-w-7xl mx-auto px-4 sm:px-6 py-6 text-center text-xs text-slate-400" },
+          // Full-width live eval banner (bottom of page, keeps chat input in view)
+          h(EvalBanner, { selectedModel: model }),
+
+          h("footer", { className: "shrink-0 max-w-7xl mx-auto px-4 sm:px-6 py-2 text-center text-xs text-slate-400" },
             "CarScout · personal use only · respect each listing site's terms of service")
         );
       }
