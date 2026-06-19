@@ -102,7 +102,7 @@
         BMW:           ["3 Series", "5 Series", "X3", "X5", "M3", "M5"],
         Hyundai:       ["Elantra", "Sonata", "Tucson", "Santa Fe", "Kona", "Ioniq 5"],
         Kia:           ["Forte", "K5", "Sportage", "Sorento", "Telluride", "EV6"],
-        Volkswagen:    ["Jetta", "Passat", "Golf", "GTI", "Tiguan", "Atlas", "ID.4"],
+        Volkswagen:    ["Jetta", "Passat", "Golf", "GTI", "Tiguan", "Atlas", "Touareg", "Taos", "Arteon", "ID.4"],
         Nissan:        ["Altima", "Sentra", "Rogue", "Pathfinder", "Frontier", "Maxima"],
         Jeep:          ["Wrangler", "Grand Cherokee", "Cherokee", "Compass", "Gladiator"],
         Dodge:         ["Charger", "Challenger", "Durango"],
@@ -369,6 +369,32 @@
         return null;
       }
 
+      // Qualifiers/keywords that are never a model name — used to avoid grabbing
+      // the wrong token when guessing an unrecognized model from free text.
+      const MODEL_STOPWORDS = new Set([
+        "under", "over", "below", "above", "near", "around", "in", "at", "with", "for", "and", "or", "the",
+        "automatic", "manual", "auto", "stick", "hybrid", "electric", "ev", "diesel", "gas", "gasoline",
+        "new", "used", "cpo", "certified", "cheap", "clean", "low", "high", "miles", "mile", "mileage",
+        "awd", "4wd", "4x4", "fwd", "rwd", "white", "black", "red", "blue", "silver", "gray", "grey", "green",
+      ]);
+
+      // Capture the model token right after the make (e.g. "vw touareg" → "Touareg")
+      // when it isn't in MAKE_MODELS, so the search still filters by model instead
+      // of returning every model from that make.
+      function guessModelAfterMake(query, makeAlias) {
+        const esc = (s) => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+        const m = query.match(new RegExp(`\\b${esc(makeAlias)}\\b\\s+([\\w.-]+)`, "i"));
+        if (!m) return null;
+        const tok = m[1];
+        if (MODEL_STOPWORDS.has(tok.toLowerCase())) return null;
+        if (/^(19|20)\d{2}$/.test(tok)) return null;            // year
+        if (/^\d{5}$/.test(tok)) return null;                   // zip
+        if (/k$/i.test(tok) || tok.includes(",")) return null;  // price (30k, 30,000)
+        if (tok.length < 2) return null;
+        // Preserve tokens with digits (X5, 330i, ID.4); Title-case plain words.
+        return /\d/.test(tok) ? tok : tok.charAt(0).toUpperCase() + tok.slice(1).toLowerCase();
+      }
+
       function parseWithRegex(query) {
         const q = String(query || "").trim();
         const lower = q.toLowerCase();
@@ -429,6 +455,10 @@
             new RegExp(`\\b${md.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`, "i").test(q)
           );
           if (m) out.model = m;
+          else {
+            const guess = guessModelAfterMake(q, makeKey);
+            if (guess) out.model = guess;
+          }
         } else {
           for (const [mk, models] of Object.entries(MAKE_MODELS)) {
             const m = models.find((md) =>
